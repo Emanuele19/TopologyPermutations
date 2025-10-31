@@ -12,34 +12,6 @@ class ModelInterface(torch.nn.Module, ABC):
         self.__dropout = dropout
         self.__log = log
 
-    @abstractmethod
-    def forward(self, data: torch_geometric.data.Data) -> torch.Tensor:
-        """
-        Performs a forward pass of the model.
-
-        Parameters
-            data : must contain the following fields
-            - `x`: node features tensor of shape [num_nodes, num_features]
-
-        Returns
-            torch.Tensor: Output tensor
-        """
-        raise NotImplementedError
-    
-    @abstractmethod
-    def train_model(self, data: torch_geometric.data.Data, optimizer, criterion, epochs:int, patience:int) -> None:
-        """
-        Performs training over `epochs` cycles.
-        
-        Parameters
-            data: must contain the following fields
-            - `x`: node features tensor of shape [num_nodes, num_features]
-
-        Returns
-            None
-        """
-        raise NotImplementedError
-
 
     @property
     def in_channels(self):
@@ -60,3 +32,15 @@ class ModelInterface(torch.nn.Module, ABC):
     @property
     def log(self):
         return self.__log
+    
+
+class GraphModelInterface(ModelInterface):
+    @abstractmethod
+    def forward(self, x, edges_index):
+        raise NotImplementedError()
+    
+
+class SimpleModelInterface(ModelInterface):
+    @abstractmethod
+    def forward(self, x):
+        raise NotImplementedError()

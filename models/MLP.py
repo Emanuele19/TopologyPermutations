@@ -7,154 +7,114 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sklearn.model_selection import StratifiedKFold
 import numpy as np
 import torch.optim as optim
-from Model import ModelInterface
+from .Model import SimpleModelInterface
 
-
-class MLP(ModelInterface):
+class MLP(SimpleModelInterface):
     def __init__(self, in_channels, hidden_channels, out_channels=1, dropout=0):
         super().__init__(in_channels, hidden_channels, out_channels, dropout)
-        
         self.fc1 = nn.Linear(in_channels, hidden_channels)
         self.fc2 = nn.Linear(hidden_channels, out_channels)
-            
-    def forward(self, x):
-        x = self.fc1(x)
-        x = F.relu(x)
-        
-        x = self.fc2(x)
-        return x.view(-1)  # Output logits for BCEWithLogitsLoss()
-    
-    def train_model(self, data, optimizer, criterion, epochs=200, patience=10):
-        self.train()
-        loss_values = []
-        val_loss_values = []
-        best_val_loss = float('inf')
-        patience_counter = 0
 
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x.view(-1)  # logits per BCEWithLogitsLoss
+
+    def train_model(self, data, optimizer, criterion, epochs=200, patience=10, log=False):
+        self.train()
+        loss_values, val_loss_values = [], []
+        best_val = float('inf'); patience_ctr = 0
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
         for epoch in range(epochs):
             optimizer.zero_grad()
-            out = self.forward(data.x)  # Forward pass
-            train_loss = criterion(out[data.train_mask], data.y[data.train_mask].float())  # Convert target to float
-            train_loss.backward()
-            optimizer.step()
+            out = self.forward(data.x)
+            loss = criterion(out[data.train_mask], data.y[data.train_mask].float())
+            loss.backward(); optimizer.step()
 
             self.eval()
             with torch.no_grad():
-                val_out = self.forward(data.x[data.val_mask])
-                val_loss = criterion(val_out, data.y[data.val_mask].float())
+                val_logits = self.forward(data.x[data.val_mask])
+                val_loss = criterion(val_logits, data.y[data.val_mask].float())
             self.train()
 
-            loss_values.append(train_loss.item())
-            val_loss_values.append(val_loss.item())
-
+            loss_values.append(loss.item()); val_loss_values.append(val_loss.item())
             scheduler.step(val_loss)
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                patience_counter = 0
+            if val_loss < best_val:
+                best_val = val_loss; patience_ctr = 0
+                best_state = {k: v.detach().cpu().clone() for k, v in self.state_dict().items()}
             else:
-                patience_counter += 1
-                if patience_counter >= patience:
-                    if self.log: print(f"Early stopping triggered at epoch {epoch}")
+                patience_ctr += 1
+                if patience_ctr >= patience:
+                    if self.log: print(f"Early stopping @ epoch {epoch}")
                     break
-            
-            if self.log and epoch % 10 == 0:
-                print(f'Epoch {epoch}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]["lr"]:.6f}')
-        
-        if self.log:
-            # Plot training and validation loss
+
+        # ripristina best
+        self.load_state_dict(best_state)
+
+        if log:
             plt.figure()
-            plt.plot(range(len(loss_values)), loss_values, label='Training Loss')
-            plt.plot(range(len(val_loss_values)), val_loss_values, label='Validation Loss', linestyle='dashed')
-            plt.xlabel('Epochs')
-            plt.ylabel('Loss')
-            plt.title('Training & Validation Loss Curve')
-            plt.legend()
-            plt.show()
-    
-    def k_fold_cross_validation(self, data, k=5, epochs=100, learning_rate=0.001, patience=10):
-        kf = StratifiedKFold(n_splits=k, shuffle=True)
-        indices = np.arange(data.x.shape[0])
-        best_model = None
-        best_f1 = 0
-        acc_scores, precision_scores, recall_scores, f1_scores = [], [], [], []
-        best_fold_metrics = {}
-        best_cm = None
+            plt.plot(loss_values, label='Train'); plt.plot(val_loss_values, label='Val', linestyle='dashed')
+            plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.title('MLP Loss'); plt.legend(); plt.show()
 
-        for fold, (train_idx, val_idx) in enumerate(kf.split(data.x, data.y.cpu().numpy())):
-            if self.log: print(f"\n🔹 Fold {fold+1}/{k}")
-            train_mask = torch.zeros(data.x.shape[0], dtype=torch.bool)
-            val_mask = torch.zeros(data.x.shape[0], dtype=torch.bool)
-            train_mask[train_idx] = True
-            val_mask[val_idx] = True
+    def k_fold_cross_validation(self, data, k=5, epochs=100, learning_rate=0.001, patience=10, log=False):
+        # k-fold solo sul "train_data_tab" (già senza common)
+        y_np = data.y.cpu().numpy().astype(int)
+        kf = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
+
+        best_model = None; best_f1 = -1.0
+        acc_scores, prec_scores, rec_scores, f1_scores = [], [], [], []
+        best_fold_metrics = {}; best_cm = None
+
+        for fold, (tr_idx, va_idx) in enumerate(kf.split(data.x, y_np), start=1):
+            if log: print(f"\n🔹 Fold {fold}/{k}")
+
+            train_mask = torch.zeros(data.num_nodes, dtype=torch.bool)
+            val_mask   = torch.zeros_like(train_mask)
+            train_mask[torch.as_tensor(tr_idx)] = True
+            val_mask[torch.as_tensor(va_idx)]   = True
             data.train_mask = train_mask
-            data.val_mask = val_mask
-            data.test_mask = ~train_mask
+            data.val_mask   = val_mask
 
-            model = MLP(in_channels=self.in_channels, 
-                        hidden_channels=self.hidden_channels, 
-                        out_channels=self.out_channels, 
-                        dropout=self.dropout)
+            model = MLP(self.in_channels, self.hidden_channels, self.out_channels, self.dropout)
             optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=5e-4)
             criterion = torch.nn.BCEWithLogitsLoss()
+
             model.train_model(data, optimizer, criterion, epochs, patience)
 
             model.eval()
             with torch.no_grad():
-                out = model(data.x)
-                out = torch.sigmoid(out)  # Apply sigmoid for binary classification
-                pred = (out[val_mask] > 0.5).int()
-                y_true = data.y[val_mask].cpu().numpy()
-                y_pred = pred.cpu().numpy()
+                logits = model(data.x[data.val_mask])
+                prob = torch.sigmoid(logits).cpu().numpy()
+                pred = (prob > 0.5).astype(int)
+                y_true = data.y[data.val_mask].cpu().numpy().astype(int)
 
-                acc = accuracy_score(y_true, y_pred)
-                precision = precision_score(y_true, y_pred)
-                recall = recall_score(y_true, y_pred)
-                f1 = f1_score(y_true, y_pred)
-                cm = confusion_matrix(y_true, y_pred)
+                acc = accuracy_score(y_true, pred)
+                pre = precision_score(y_true, pred, zero_division=0)
+                rec = recall_score(y_true, pred, zero_division=0)
+                f1  = f1_score(y_true, pred, zero_division=0)
+                cm  = confusion_matrix(y_true, pred, labels=[0,1])
 
-                acc_scores.append(acc)
-                precision_scores.append(precision)
-                recall_scores.append(recall)
-                f1_scores.append(f1)
+            acc_scores.append(acc); prec_scores.append(pre); rec_scores.append(rec); f1_scores.append(f1)
+            if log:
+                print(f"Acc={acc:.4f} Prec={pre:.4f} Rec={rec:.4f} F1={f1:.4f}")
 
-                if self.log:
-                    print(f"Accuracy: {acc:.4f}")
-                    print(f"Precision: {precision:.4f}")
-                    print(f"Recall: {recall:.4f}")
-                    print(f"F1-Score: {f1:.4f}")
+            if f1 > best_f1:
+                best_f1 = f1; best_model = model
+                best_fold_metrics = {"Accuracy": acc, "Precision": pre, "Recall": rec, "F1-Score": f1}
+                best_cm = cm
 
-                if f1 > best_f1:
-                    best_f1 = f1
-                    best_model = model
-                    best_fold_metrics = {
-                        "Accuracy": acc,
-                        "Precision": precision,
-                        "Recall": recall,
-                        "F1-Score": f1
-                    }
-                    best_cm = cm
+        if log:
+            print("\n📊 K-Fold (media ± std)")
+            print(f"Accuracy : {np.mean(acc_scores):.4f} ± {np.std(acc_scores):.4f}")
+            print(f"Precision: {np.mean(prec_scores):.4f} ± {np.std(prec_scores):.4f}")
+            print(f"Recall   : {np.mean(rec_scores):.4f} ± {np.std(rec_scores):.4f}")
+            print(f"F1-Score : {np.mean(f1_scores):.4f} ± {np.std(f1_scores):.4f}")
 
-        if self.log:
-            print("\n📊 **Statistiche medie della K-Fold Cross Validation**")
-            print(f"Accuracy: {np.mean(acc_scores):.4f} ± {np.std(acc_scores):.4f}")
-            print(f"Precision: {np.mean(precision_scores):.4f} ± {np.std(precision_scores):.4f}")
-            print(f"Recall: {np.mean(recall_scores):.4f} ± {np.std(recall_scores):.4f}")
-            print(f"F1-Score: {np.mean(f1_scores):.4f} ± {np.std(f1_scores):.4f}")
-            
-            print("\n📊 **Prestazioni del miglior modello nella sua fold di validazione**")
-            for metric, value in best_fold_metrics.items():
-                print(f"{metric}: {value:.4f}")
-            
-            # Plot confusion matrix for best model
             if best_cm is not None:
                 plt.figure(figsize=(4,4))
                 sns.heatmap(best_cm, annot=True, fmt='d', cmap='Blues', xticklabels=[0,1], yticklabels=[0,1])
-                plt.xlabel("Predicted")
-                plt.ylabel("Actual")
-                plt.title("Confusion Matrix of Best Model")
-                plt.show()
+                plt.xlabel("Predicted"); plt.ylabel("Actual"); plt.title("Best Fold Confusion Matrix"); plt.show()
 
         return best_model, best_fold_metrics

@@ -3,3 +3,6 @@
 .venv
 output/
 model_output/
+**/__pycache__
+**/*.pyc
+processed/
