@@ -1,14 +1,6 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GATConv, BatchNorm
-from torch_geometric.utils import subgraph
-from torch_geometric.data import Data
-from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-import numpy as np
-import torch.optim as optim
-
 from Model import ModelInterface
 
 class GATResidual1L(ModelInterface):

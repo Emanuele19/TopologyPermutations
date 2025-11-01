@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-import torch_geometric, torch
+import torch
 
 class ModelInterface(torch.nn.Module, ABC):
 

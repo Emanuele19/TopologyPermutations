@@ -1,15 +1,6 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-from sklearn.model_selection import StratifiedKFold
-import numpy as np
-import torch.optim as optim
 from torch_geometric.nn import SAGEConv, BatchNorm
-from torch_geometric.utils import subgraph
-from torch_geometric.data import Data
 
 from .Model import ModelInterface
 
