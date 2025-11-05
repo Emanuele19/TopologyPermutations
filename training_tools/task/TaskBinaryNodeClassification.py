@@ -93,8 +93,13 @@ class TaskBinaryNodeClassification(AbstractTask):
 
         if isinstance(model, SimpleModelInterface):
             logits = model(x)
-        else:
+        elif isinstance(model, GraphModelInterface):
             logits = model(x, edge_index)
+        else:
+            try:
+                logits = model(x, edge_index)
+            except TypeError:
+                logits = model(x)
 
         if logits.dim() == 2 and logits.size(1) == 1:
             logits = logits.view(-1)
