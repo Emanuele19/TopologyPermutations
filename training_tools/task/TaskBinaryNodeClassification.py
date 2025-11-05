@@ -91,11 +91,10 @@ class TaskBinaryNodeClassification(AbstractTask):
         """
         x, y, edge_index, mask = self._select_inputs(data, parts, phase, fold_k, mode)
 
-        # forward
-        try:
-            logits = model(x, edge_index)  # GNN
-        except TypeError:
-            logits = model(x)              # MLP/tabellare
+        if isinstance(model, SimpleModelInterface):
+            logits = model(x)
+        else:
+            logits = model(x, edge_index)
 
         if logits.dim() == 2 and logits.size(1) == 1:
             logits = logits.view(-1)

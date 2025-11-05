@@ -1,9 +1,9 @@
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import APPNP, BatchNorm
-from .Model import ModelInterface
+from .Model import GraphModelInterface
 
-class APPNPNet(ModelInterface):
+class APPNPNet(GraphModelInterface):
     def __init__(self, in_channels, hidden_channels, out_channels=1, K=10, alpha=0.1, dropout=0.2):
         super().__init__(in_channels, hidden_channels, out_channels, dropout)
         self.lin1 = nn.Linear(in_channels, hidden_channels)

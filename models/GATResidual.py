@@ -1,9 +1,9 @@
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GATConv, BatchNorm
-from Model import ModelInterface
+from Model import GraphModelInterface
 
-class GATResidual1L(ModelInterface):
+class GATResidual1L(GraphModelInterface):
     def __init__(self, in_channels, hidden_channels, out_channels=1, heads=4, dropout=0.2):
         super().__init__(in_channels, hidden_channels, out_channels, dropout)
         self.gat = GATConv(in_channels, hidden_channels // heads, heads=heads, concat=True, dropout=dropout)

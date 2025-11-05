@@ -2,9 +2,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import SAGEConv, BatchNorm
 
-from .Model import ModelInterface
+from .Model import GraphModelInterface
 
-class GCN_Sage(ModelInterface):
+class GCN_Sage(GraphModelInterface):
     """
     GraphSAGE "pulita":
     - ReLU + BatchNorm tra le conv
