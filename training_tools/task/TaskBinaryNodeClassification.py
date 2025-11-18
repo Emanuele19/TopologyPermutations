@@ -144,7 +144,8 @@ class TaskBinaryNodeClassification(AbstractTask):
     @staticmethod
     def _phase_masks(parts: Dict[str, object],
                      phase: Literal['test', 'train', 'val'],
-                     k: Optional[int]) -> Tuple[Tensor, Tensor, Tensor]:
+                     k: Optional[int],
+                     aux_in_test: bool = True) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Restituisce (keep_sup_mask, keep_aux_mask, loss_sup_mask) per la fase richiesta.
 
@@ -157,7 +158,7 @@ class TaskBinaryNodeClassification(AbstractTask):
 
         if phase == "test":
             keep_sup = parts["test_mask"] & supervised_mask
-            keep_aux = torch.zeros_like(aux_mask, dtype=torch.bool)  # niente aux in test
+            keep_aux = aux_mask.clone() if aux_in_test else torch.zeros_like(aux_mask, dtype=torch.bool)
             loss_sup = keep_sup.clone()
             return keep_sup, keep_aux, loss_sup
 
@@ -187,16 +188,26 @@ class TaskBinaryNodeClassification(AbstractTask):
             keep_sup, keep_aux, loss_sup = self._phase_masks(parts, phase, k)
             if phase in ("train", "val"):
                 keep_nodes = keep_sup | keep_aux
+
+                keep_idx = keep_nodes.nonzero(as_tuple=False).view(-1)
+                ei_sub, _ = subgraph(keep_idx, data.edge_index,
+                                    relabel_nodes=True, num_nodes=data.num_nodes)
+                x_sub = data.x[keep_idx]
+                y_sub = data.y[keep_idx]
+                loss_mask_sub = loss_sup[keep_idx]
+                return x_sub, y_sub, ei_sub, loss_mask_sub
+
             else:
                 keep_nodes = keep_sup  # test: solo supervised
+                keep_nodes = keep_sup | keep_aux  # mantieni aux nel test (se impostati)
 
-            keep_idx = keep_nodes.nonzero(as_tuple=False).view(-1)
-            ei_sub, _ = subgraph(keep_idx, data.edge_index,
-                                 relabel_nodes=True, num_nodes=data.num_nodes)
-            x_sub = data.x[keep_idx]
-            y_sub = data.y[keep_idx]
-            loss_mask_sub = loss_sup[keep_idx]
-            return x_sub, y_sub, ei_sub, loss_mask_sub
+                keep_idx = keep_nodes.nonzero(as_tuple=False).view(-1)
+                ei_sub, _ = subgraph(keep_idx, data.edge_index,
+                                    relabel_nodes=True, num_nodes=data.num_nodes)
+                x_sub = data.x[keep_idx]
+                y_sub = data.y[keep_idx]
+                loss_mask_sub = loss_sup[keep_idx]
+                return x_sub, y_sub, ei_sub, loss_mask_sub
 
         # transductive: grafo intero + mask globale per la fase
         x_all, y_all = data.x, data.y
@@ -210,122 +221,3 @@ class TaskBinaryNodeClassification(AbstractTask):
 
         return x_all, y_all, ei, mask_loss
 
-
-    # METODO NON ANCORA USATO
-    # Questo metodo serve per implementare gli ego_graph in fase inductive
-    # L'obiettivo è valutare le prestazioni del modello addestrato in inductive
-    #   su nodi con vicinato invece che singoli
-    # QUANDO LO SOSTITUIRAI A QUELLO VECCHIO:
-    # - Aggiungi i parametri ego_graph e ego_k ai metodi sopra
-    # - Aggiungi i parametri alla chiamata a questa funzione fatta nei
-    #   metodi sopra
-    # COME TESTARE QUESTO METODO:
-    # Il file utils_debug.py plotta il sottografo di test
-    # PERCHÉ NON USO ANCORA QUESTO METODO:
-    # Al momento il sampling dei nodi per le partizioni di test e training
-    #   è completamente casuale, quindi non necessariamente i nodi di test
-    #   hanno archi che li collegano, rendendo questo metodo inutile
-    # Prima implemento un meccanismo per fare sampling mantenendo il
-    #   più possibile la componente connessa e poi potrò usare questo metodo
-    def _select_inputs_new(self,
-                    data: Data,
-                    parts: Dict[str, object],
-                    phase: Literal['test', 'train', 'val'],
-                    k: Optional[int],
-                    mode: Literal['transductive', 'inductive'],
-                    ego_graph: bool = False,
-                    ego_k: int = 1) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        """
-        Restituisce (x, y, edge_index, mask_loss) per la fase/modo richiesti.
-
-        - 'transductive' : (x_all, y_all, edge_index_all, mask_globale)
-        - 'inductive'    :
-            * default: subgrafo per fase con reindex; in test include **solo** supervised (nodi spesso isolati).
-            * se `ego_graph=True` e phase='test': batch block-diagonale di ego-graph a r=ego_k
-            **limitati alla partizione di test supervised** (no train/val, no aux); la mask seleziona i centri.
-        """
-        assert mode in ("transductive", "inductive")
-
-        # --- transductive invariato ---
-        if mode == "transductive":
-            x_all, y_all = data.x, data.y
-            ei = data.edge_index
-            if phase == "test":
-                mask_loss = parts["test_mask"] & parts["supervised_mask"]
-            else:
-                tr, va = self._fold_masks(parts, k)
-                mask_loss = tr if phase == "train" else va
-            return x_all, y_all, ei, mask_loss
-
-        # --- inductive ---
-        keep_sup, keep_aux, loss_sup = self._phase_masks(parts, phase, k)
-
-        # Caso speciale: TEST + EGO-GRAPH → batch di ego-graph su soli supervised di test
-        if phase == "test" and ego_graph:
-            device = data.x.device
-            keep_test_sup = (parts["test_mask"] & parts["supervised_mask"]).to(torch.bool)
-            test_nodes = torch.nonzero(keep_test_sup, as_tuple=False).view(-1)
-
-            # edge_index ristretto ai soli archi intra-test (esclude train/val e aux)
-            ei = data.edge_index
-            edge_keep_test = keep_test_sup[ei[0]] & keep_test_sup[ei[1]]
-            ei_test = ei[:, edge_keep_test]
-
-            # Costruzione batch block-diagonale
-            x_chunks, y_chunks = [], []
-            ei_chunks = []
-            center_masks = []
-            offset = 0
-
-            for c in test_nodes.tolist():
-                subset, ei_local, mapping, _ = k_hop_subgraph(
-                    torch.tensor([c], device=ei_test.device),
-                    ego_k,
-                    ei_test,
-                    relabel_nodes=True,
-                    num_nodes=data.num_nodes
-                )
-                # features/labels locali
-                x_sub = data.x[subset]
-                y_sub = data.y[subset]
-
-                # reindex per concatenazione block-diagonale
-                ei_local = ei_local.clone()
-                if ei_local.numel() > 0:
-                    ei_local = ei_local + offset
-
-                # center mask locale → mask globale con offset
-                cm_local = torch.zeros(subset.numel(), dtype=torch.bool, device=device)
-                cm_local[mapping.view(-1)] = True
-
-                # accumula
-                x_chunks.append(x_sub)
-                y_chunks.append(y_sub)
-                ei_chunks.append(ei_local)
-                center_masks.append(cm_local)
-                offset += subset.numel()
-
-            if len(x_chunks) == 0:
-                # Nessun test node (degenera): restituisci tensori vuoti coerenti
-                empty = data.x.new_zeros((0, data.x.size(1)))
-                return empty, data.y.new_zeros((0,), dtype=data.y.dtype), data.edge_index.new_zeros((2,0)), empty.new_zeros((0,), dtype=torch.bool)
-
-            x_cat = torch.cat(x_chunks, dim=0)
-            y_cat = torch.cat(y_chunks, dim=0)
-            ei_cat = torch.cat(ei_chunks, dim=1) if ei_chunks and ei_chunks[0].numel() > 0 else data.edge_index.new_zeros((2,0))
-            center_mask = torch.cat(center_masks, dim=0)
-
-            return x_cat, y_cat, ei_cat, center_mask
-
-        # Percorso inductive standard (train/val o test senza ego)
-        if phase in ("train", "val"):
-            keep_nodes = keep_sup | keep_aux
-        else:
-            keep_nodes = keep_sup  # test: solo supervised
-
-        keep_idx = keep_nodes.nonzero(as_tuple=False).view(-1)
-        ei_sub, _ = subgraph(keep_idx, data.edge_index, relabel_nodes=True, num_nodes=data.num_nodes)
-        x_sub = data.x[keep_idx]
-        y_sub = data.y[keep_idx]
-        loss_mask_sub = loss_sup[keep_idx]
-        return x_sub, y_sub, ei_sub, loss_mask_sub

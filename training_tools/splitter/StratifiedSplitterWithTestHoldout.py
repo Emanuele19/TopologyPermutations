@@ -6,6 +6,9 @@ import torch
 from torch import Tensor
 from torch_geometric.data import Data
 from sklearn.model_selection import StratifiedKFold
+from collections import deque
+
+from training_tools.splitter.HoldoutMode import HoldoutMode
 
 
 class StratifiedSplitterWithTestHoldout:
@@ -45,7 +48,8 @@ class StratifiedSplitterWithTestHoldout:
 
     def __init__(self, test_size: float = 0.1, n_splits: int = 5, seed: int = 42,
                  name_attr: str = "string_id", suffix_regex: str = r"_(AD|PD)$",
-                 mode: Literal['inductive', 'transductive'] = 'inductive'):
+                 mode: Literal['inductive', 'transductive'] = 'inductive',
+                 aux_in_test: bool = True):
         assert 0 < test_size < 1 and n_splits >= 2
         self.test_size = float(test_size)
         self.n_splits = int(n_splits)
@@ -54,7 +58,7 @@ class StratifiedSplitterWithTestHoldout:
         self.suffix_re = re.compile(suffix_regex)
         self.mode = mode
 
-    def split(self, data: Data) -> Dict[str, object]:
+    def split(self, data: Data, holdout_mode: HoldoutMode = HoldoutMode.RANDOM, aux_in_test: bool = True) -> Dict[str, object]:
         """
         Esegue lo split nested (test hold-out + K-fold interno) per classificazione binaria
         a livello nodo su un grafo singolo, rispettando la policy:
@@ -146,11 +150,24 @@ class StratifiedSplitterWithTestHoldout:
         sup_idx = torch.nonzero(supervised_mask, as_tuple=False).view(-1).cpu().numpy()
         sup_y = y[supervised_mask].cpu().numpy().astype(int)
 
+        aux_idx = torch.nonzero(aux_mask, as_tuple=False).view(-1).cpu().numpy() if aux_in_test else None
+
         # stratified split semplice per nodi
-        test_sel = self._stratified_holdout_indices(sup_idx, sup_y, frac=self.test_size, rng=rng)
+        if holdout_mode == HoldoutMode.RANDOM:
+            test_sel = self._stratified_holdout_indices(sup_idx, sup_y, frac=self.test_size, rng=rng)
+        elif holdout_mode == HoldoutMode.BFS:
+            test_sel = self._bfs_stratified_holdout_indices(
+                indices_sup=sup_idx,
+                indices_aux=aux_idx,
+                labels=sup_y,
+                edge_index=data.edge_index,
+                frac=self.test_size,
+                rng=rng,)
+            
         test_mask = torch.zeros(N, dtype=torch.bool)
         test_mask[test_sel] = True
-        test_mask &= supervised_mask  # mai aux nel test
+        if not aux_in_test:
+            test_mask &= supervised_mask
 
         # 3) Train pool: supervised rimanenti + aux
         train_pool_supervised = supervised_mask & (~test_mask)
@@ -209,6 +226,273 @@ class StratifiedSplitterWithTestHoldout:
             if k > 0:
                 sel.append(rng.choice(label_indices, size=k, replace=False))
         return np.unique(np.concatenate(sel)) if sel else np.array([], dtype=indices.dtype)
+    
+    @staticmethod
+    def _bfs_stratified_holdout_indices_old(
+        indices: np.ndarray,          # indici GLOBALI dei soli supervised
+        labels: np.ndarray,           # label 0/1 allineate a 'indices'
+        edge_index: torch.Tensor,     # [2, E] archi globali
+        frac: float,                  # frazione di supervised da mettere in test
+        rng,                          # np.random.Generator (seed già fissato a monte)
+        backfill_random_if_needed: bool = True,
+    ) -> np.ndarray:
+        """
+        Holdout ~frac, con DUE seed (uno per classe).
+        - Calcola la quota per classe: k0, k1 (round frac * |classe|).
+        - Sceglie un seed casuale in ciascuna classe.
+        - Esegue due BFS indipendenti (classe 0 e classe 1) finché non raggiunge le rispettive quote.
+        - Se una BFS non copre tutta la quota, opzionalmente completa a caso dentro la stessa classe.
+
+        Ritorna: indici GLOBALI selezionati per il test.
+        """
+        if len(indices) == 0:
+            return np.array([], dtype=int)
+
+        # ---- Quote per classe ----
+        classes = np.unique(labels)
+        targets = {}
+        for c in classes:
+            n_c = int((labels == c).sum())
+            k_c = max(1, int(round(frac * n_c)))
+            k_c = min(k_c, n_c)
+            targets[int(c)] = k_c
+
+        # ---- Mappa globale<->locale e adiacenza sui supervised ----
+        idx_gl2loc = {int(g): i for i, g in enumerate(indices)} # ridondante se gli id sono ordinati e continui
+        u = edge_index[0].cpu().numpy()
+        v = edge_index[1].cpu().numpy()
+        mask_sup = np.isin(u, indices) & np.isin(v, indices) # solo archi che collegano nodi supervised
+        u_sup, v_sup = u[mask_sup], v[mask_sup] # i supervised collegati dagli archi della riga precedente
+
+        adj = [[] for _ in range(len(indices))]
+        for a, b in zip(u_sup, v_sup):
+            ia, ib = idx_gl2loc[int(a)], idx_gl2loc[int(b)]
+            adj[ia].append(ib)
+            adj[ib].append(ia)
+
+        # ---- helper: BFS confinata alla classe 'c' ----
+        def bfs_(seed_loc: int, k_target: int) -> list[int]:
+            """Ritorna posizioni locali selezionate nella classe c (max k_target) via BFS da seed_loc."""
+            sel = []
+            visited = np.zeros(len(indices), dtype=bool)
+            q = deque([seed_loc])
+            visited[seed_loc] = True
+            while q and len(sel) < k_target:
+                cur = q.popleft()
+                sel.append(cur)
+                neigh = adj[cur]
+                if len(neigh) > 1:
+                    neigh = neigh.copy()
+                    rng.shuffle(neigh) # Per evitare ordine deterministico
+                for nb in neigh:
+                    if not visited[nb]:
+                        visited[nb] = True
+                        q.append(nb)
+            return sel
+
+        selected_loc_all = []
+
+        # ---- classe 0 ----
+        loc0 = np.where(labels == 0)[0]
+        target0 = targets.get(0, 0)
+
+        selected0: list[int] = []
+        remaining_target0 = target0
+
+        pool0 = set(loc0.tolist())
+
+        # accumula via BFS finché raggiungi il target o non hai più candidati utili
+        while remaining_target0 > 0 and pool0:
+            # scegli un seed casuale tra i rimanenti (non ancora selezionati)
+            seed0_loc = int(rng.choice(list(pool0)))
+            sel0_once = bfs_(seed0_loc, k_target=remaining_target0)
+
+            # tieni solo nodi della stessa classe e non ancora scelti
+            sel0_once = [i for i in sel0_once if i in pool0]
+
+            if not sel0_once:
+                # nessun progresso da questo seed: non riprovare questo seed
+                pool0.discard(seed0_loc)
+                continue
+
+            # aggiorna selezione cumulativa
+            selected0.extend(sel0_once)
+            pool0.difference_update(sel0_once)
+            remaining_target0 = target0 - len(selected0)
+
+            if backfill_random_if_needed and remaining_target0 > 0 and pool0:
+                print(f"[WARN] backfill classe 0: {len(selected0) = }, {target0 = }")
+            else:
+                break
+
+        # aggiungi al set totale
+        selected_loc_all.extend(selected0)
+
+        # se non hai raggiunto il target e vuoi saperlo
+        if len(selected0) < target0:
+            print(f"[WARN] classe 0: raggiunti {len(selected0)}/{target0} nodi con BFS multi-seed.")
+
+        # ---- classe 1 ----
+        loc1 = np.where(labels == 1)[0]
+        target1 = targets.get(1, 0)
+
+        selected1: list[int] = []
+        remaining_target1 = target1
+        pool1 = set(loc1.tolist())
+
+        while remaining_target1 > 0 and pool1:
+            seed1_loc = int(rng.choice(list(pool1)))
+            sel1_once = bfs_(seed1_loc, k_target=remaining_target1)
+            sel1_once = [i for i in sel1_once if i in pool1]
+
+            if not sel1_once:
+                pool1.discard(seed1_loc)
+                continue
+
+            selected1.extend(sel1_once)
+            pool1.difference_update(sel1_once)
+            remaining_target1 = target1 - len(selected1)
+
+            if backfill_random_if_needed and remaining_target1 > 0 and pool1:
+                print(f"[WARN] backfill classe 1: {len(selected1) = }, {target1 = }")
+            else:
+                break
+
+        selected_loc_all.extend(selected1)
+
+        if len(selected1) < target1:
+            print(f"[WARN] classe 1: raggiunti {len(selected1)}/{target1} nodi con BFS multi-seed.")
+
+        # ---- ritorna indici GLOBALI ordinati/uniques ----
+        if not selected_loc_all:
+            return np.array([], dtype=int)
+        selected_glob = indices[np.unique(np.array(selected_loc_all, dtype=int))]
+        return selected_glob
+    
+    @staticmethod
+    def _bfs_stratified_holdout_indices(
+        indices_sup: np.ndarray,        # indici GLOBALI dei soli supervised
+        labels: np.ndarray,             # label 0/1 allineate a 'indices'
+        edge_index: torch.Tensor,       # [2, E] archi globali
+        frac: float,                    # frazione di supervised da mettere in test
+        rng,                            # np.random.Generator (seed già fissato a monte)
+        indices_aux: np.ndarray = None, # indici GLOBALI dei nodi ausiliari (se None, non agisce)
+    ) -> np.ndarray:
+        """
+        Holdout ~frac, con DUE seed (uno per classe).
+        - Calcola la quota per classe: k0, k1 (round frac * |classe|).
+        - Sceglie un seed casuale in ciascuna classe.
+        - Esegue due BFS indipendenti (classe 0 e classe 1) finché non raggiunge le rispettive quote.
+        - Se una BFS non copre tutta la quota, opzionalmente completa a caso dentro la stessa classe.
+
+        Ritorna: indici GLOBALI selezionati per il test.
+        """
+        if len(indices_sup) == 0:
+            return np.array([], dtype=int)
+
+        # ---- Quote per classe ----
+        classes = np.unique(labels)
+        targets = {}
+        for c in classes:
+            n_c = int((labels == c).sum())
+            k_c = max(1, int(round(frac * n_c)))
+            k_c = min(k_c, n_c)
+            targets[int(c)] = k_c
+
+        # ---- Mappa globale<->locale e adiacenza sui supervised ----
+        idx_gl2loc = {int(g): i for i, g in enumerate(indices_sup)} # ridondante se gli id sono ordinati e continui
+        u = edge_index[0].cpu().numpy()
+        v = edge_index[1].cpu().numpy()
+        mask_sup = np.isin(u, indices_sup) & np.isin(v, indices_sup) # solo nodi supervised collegati
+        u_sup, v_sup = u[mask_sup], v[mask_sup] # id dei nodi di cui sopra
+
+        adj = [[] for _ in range(len(indices_sup))]
+        for a, b in zip(u_sup, v_sup):
+            ia, ib = idx_gl2loc[int(a)], idx_gl2loc[int(b)]
+            adj[ia].append(ib)
+            adj[ib].append(ia)
+
+        idx_gl2loc_aux = dict()
+        if isinstance(indices_aux, np.ndarray): # (vuol dire not None)se si vogliono includere anche i nodi ausiliari
+            idx_gl2loc_aux = {int(g): int(g) for _, g in enumerate(indices_aux)}
+            idx_gl2loc |= idx_gl2loc_aux # ridondante se gli id sono ordinati e continui
+            mask_aux = np.isin(u, indices_aux) & np.isin(v, indices_aux)    # Tutti i nodi aux collegati
+            mask_aux |= np.isin(u, indices_aux) & np.isin(v, indices_sup)   # Tutti i nodi aux collegati ad un nodo sup
+            mask_aux |= np.isin(u, indices_sup) & np.isin(v, indices_aux)   # Inverso di sopra per adirezionalità (ridondante probabilmente)
+            u_add, v_add = u[mask_aux], v[mask_aux]
+
+            adj += [[] for _ in range(len(idx_gl2loc))] # aggiungi entry ai vettori di adiacenza
+            for a, b in zip(u_add, v_add):
+                ia, ib = idx_gl2loc[int(a)], idx_gl2loc[int(b)]
+                adj[ia].append(ib)
+                adj[ib].append(ia)
+
+
+        # ---- helper: BFS confinata alla classe 'c' ----
+        def bfs_(seed_loc: int, k_target: int) -> list[int]:
+            """Ritorna posizioni locali selezionate nella classe c (max k_target) via BFS da seed_loc."""
+            sel = []
+            count = 0
+            visited_len = len(indices_sup) + len(idx_gl2loc_aux)
+            visited = np.zeros(visited_len, dtype=bool)
+            q = deque([seed_loc])
+            visited[seed_loc] = True
+            while q and count < k_target:
+                cur = q.popleft()
+                sel.append(cur) 
+                if cur not in idx_gl2loc_aux: # conta solo i nodi supervised
+                    count += 1
+                neigh = adj[cur]
+                if len(neigh) > 1:
+                    neigh = neigh.copy()
+                    if isinstance(indices_aux, np.ndarray): # Randomizza il vicinato sup e sposta quello aux alla fine (prediligi nodi sup)
+                        sup_neigh = [n for n in neigh if n not in idx_gl2loc_aux]
+                        aux_neigh = [n for n in neigh if n in idx_gl2loc_aux]
+                        rng.shuffle(sup_neigh)
+                        neigh = sup_neigh + aux_neigh
+                    else:
+                        rng.shuffle(neigh) # Per evitare ordine deterministico
+                for nb in neigh:
+                    if not visited[nb]:
+                        visited[nb] = True
+                        q.append(nb)
+            return sel
+
+        selected_loc_all = []
+
+        # ---- classe 0 ----
+        loc0 = np.where(labels == 0)[0]
+        target0 = targets.get(0, 0)
+
+        seed0_loc = int(rng.choice(list(loc0)))
+        sel0_once = bfs_(seed0_loc, k_target=target0)
+
+        if len([n for n in sel0_once if n not in idx_gl2loc_aux]) < target0:
+            print(f"[WARN] c'è bisogno di backfill (classe 0)")
+        
+        selected_loc_all.extend(sel0_once)
+
+        # ---- classe 1 ----
+        loc1 = np.where(labels == 1)[0]
+        target1 = targets.get(1, 0)
+
+        seed1_loc = int(rng.choice(list(loc1)))
+        sel1_once = bfs_(seed1_loc, k_target=target1)
+
+        if len([n for n in sel1_once if n not in idx_gl2loc_aux]) < target1:
+            print(f"[WARN] c'è bisogno di backfill (classe 1)")
+
+        selected_loc_all.extend(sel1_once)
+
+        # ---- ritorna indici GLOBALI ordinati/uniques ----
+        if not selected_loc_all:
+            return np.array([], dtype=int)
+        
+        global_indices = np.hstack([indices_sup, indices_aux]) if isinstance(indices_aux, np.ndarray) else indices_sup
+
+        selected_glob = global_indices[np.unique(np.array(selected_loc_all, dtype=int))]
+        return selected_glob
+
 
     @staticmethod
     def _stratified_kfold_assign(indices: np.ndarray, labels: np.ndarray, K: int, seed: int):
