@@ -50,7 +50,8 @@ class NeuroDegAnc2VecDataset(InMemoryDataset):
                  ad_edges_csv: str = "networks/AD_edges.csv",
                  pd_edges_csv: str = "networks/PD_edges.csv",
                  anc2vec_npz_path: str = "data_pipeline/anc2vec_go_embeddings_v1.npz",
-                 transform=None, pre_transform=None):
+                 transform=None, pre_transform=None,
+                 force_reload=False):
         self._cfg = {
             "ad_nodes_csv": ad_nodes_csv,
             "pd_nodes_csv": pd_nodes_csv,
@@ -58,7 +59,7 @@ class NeuroDegAnc2VecDataset(InMemoryDataset):
             "pd_edges_csv": pd_edges_csv,
             "anc2vec_npz_path": anc2vec_npz_path
         }
-        super().__init__(root, transform, pre_transform)
+        super().__init__(root, transform, pre_transform, force_reload=force_reload)
         # --- LOAD con allowlist + weights_only=False ---
         processed_path = self.processed_paths[0]
         try:
