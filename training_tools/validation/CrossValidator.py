@@ -114,7 +114,6 @@ class CrossValidator:
 
             per_fold.append({
                 "fold": k,
-                "fold": k,
                 "history": history,     # curva per epoca
                 "val_metrics": m_val,   # metriche calcolate con best_state_k
             })
