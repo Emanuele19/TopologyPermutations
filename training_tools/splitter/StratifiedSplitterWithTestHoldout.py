@@ -61,8 +61,8 @@ class StratifiedSplitterWithTestHoldout:
         """
         Esegue lo split nested (test hold-out + K-fold interno) per classificazione binaria
         a livello nodo su un grafo singolo, rispettando la policy:
-        - i nodi duplicati ausiliari (es. con suffisso "_AD"/"_PD") **non** entrano mai in test,
-            ma restano nel grafo per fornire contesto topologico (message passing);
+        - l'entrata dei nodi duplicati ausiliari (es. con suffisso "_AD"/"_PD") nel test 
+            viene gestita dal parametri `aux_in_test`;
         - lo split (test e K-fold) è eseguito **solo** sui nodi supervised (non duplicati).
 
         Parametri
@@ -74,6 +74,11 @@ class StratifiedSplitterWithTestHoldout:
             - `edge_index`: LongTensor [2, E], archi
             - (opz.) `string_id`: List[str] di lunghezza N; i duplicati terminano con "_AD"/"_PD"
             - (opz.) `was_common_before_dup`: BoolTensor [N], True per nodi duplicati derivati da nodi comuni
+        holdout_mode : `HoldoutMode`:
+            Gestisce la modalità di holdout del test set in termini di selezione dei nodi.
+        aux_in_test: bool:
+            Gestisce l'entrata la possibilità di far entrare nodi ausiliari nel test set.
+            Utile per gli HoldoutMode.BFS per formare componenti più connesse. 
 
         Ritorna
         -------
