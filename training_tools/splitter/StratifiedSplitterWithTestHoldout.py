@@ -48,8 +48,7 @@ class StratifiedSplitterWithTestHoldout:
 
     def __init__(self, test_size: float = 0.1, n_splits: int = 5, seed: int = 42,
                  name_attr: str = "string_id", suffix_regex: str = r"_(AD|PD)$",
-                 mode: Literal['inductive', 'transductive'] = 'inductive',
-                 aux_in_test: bool = True):
+                 mode: Literal['inductive', 'transductive'] = 'inductive'):
         assert 0 < test_size < 1 and n_splits >= 2
         self.test_size = float(test_size)
         self.n_splits = int(n_splits)
