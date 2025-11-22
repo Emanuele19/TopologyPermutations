@@ -6,3 +6,9 @@ model_output/
 **/__pycache__
 **/*.pyc
 data/
+
+to_graphml.py
+test_split_bfs.*
+test_notepad.ipynb
+grafo_per_cytoscape.graphml
+debug.py
