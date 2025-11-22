@@ -57,7 +57,11 @@ class StratifiedSplitterWithTestHoldout:
         self.suffix_re = re.compile(suffix_regex)
         self.mode = mode
 
-    def split(self, data: Data, holdout_mode: HoldoutMode = HoldoutMode.RANDOM, aux_in_test: bool = True) -> Dict[str, object]:
+    def split(self, 
+            data: Data, 
+            holdout_mode: HoldoutMode = HoldoutMode.RANDOM, 
+            aux_in_test: bool = True,
+            aux_construction_property: str = 'regex') -> Dict[str, object]:
         """
         Esegue lo split nested (test hold-out + K-fold interno) per classificazione binaria
         a livello nodo su un grafo singolo, rispettando la policy:
@@ -141,7 +145,11 @@ class StratifiedSplitterWithTestHoldout:
 
         # 1) aux vs supervised (via suffisso nel nome)
         names = list(getattr(data, self.name_attr)) if hasattr(data, self.name_attr) else [f"n{i}" for i in range(N)]
-        aux_mask = torch.tensor([bool(self.suffix_re.search(n)) for n in names], dtype=torch.bool)
+        if aux_construction_property == 'regex':
+            aux_mask = torch.tensor([bool(self.suffix_re.search(n)) for n in names], dtype=torch.bool)
+        else:
+            assert hasattr(data, aux_construction_property), f"aux_construction_property set to {aux_construction_property} but not found in data"
+            aux_mask = getattr(data, aux_construction_property)
         supervised_mask = (~aux_mask)
 
         # safety: supervised devono essere binari
