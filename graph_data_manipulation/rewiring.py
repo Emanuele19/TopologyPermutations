@@ -1,3 +1,8 @@
+# Per esperimenti su grafi disconnessi (no aux):
+# - rewire_degree_preserving_complete
+# - rewire_degree_preserving_stratified
+# - rewire_non_degree_preserving_stratified
+
 from __future__ import annotations
 import re
 from typing import Optional, Dict, List, Tuple
@@ -23,6 +28,22 @@ def _make_simple_undirected(edge_index: Tensor, num_nodes: int) -> Tensor:
     # simmetrizza
     ei_ud = to_undirected(ei_u, num_nodes=num_nodes)
     return ei_ud
+
+def _edge_index_to_half_undirected(edge_index: Tensor) -> Tensor:
+    """
+    Porta edge_index a rappresentazione non orientata "half":
+    - rimuove self-loop
+    - normalizza ogni arco come (min(u,v), max(u,v))
+    - rimuove duplicati
+    Restituisce edge_index [2, E_half] con u<v per ogni colonna.
+    """
+    ei, _ = remove_self_loops(edge_index)
+    i, j = ei
+    u = torch.minimum(i, j)
+    v = torch.maximum(i, j)
+    ei_half = torch.stack([u, v], dim=0)
+    ei_half = torch.unique(ei_half, dim=1)
+    return ei_half
 
 
 def _nx_from_edge_index(edge_index: Tensor, num_nodes: int) -> nx.Graph:
@@ -75,6 +96,7 @@ def _double_edge_swap_safe(
         return G.copy()  # nessun rewiring possibile: ritorna l’originale
 
 
+# Nuovo
 def rewire_degree_preserving_complete(
     data: Data,
     *,
@@ -121,7 +143,9 @@ def rewire_degree_preserving_complete(
     device = g.x.device if isinstance(g.x, torch.Tensor) else torch.device("cpu")
     N = g.num_nodes
     # normalizza edge_index a grafo semplice non orientato
-    ei = _make_simple_undirected(g.edge_index.to('cpu'), num_nodes=N)
+    # ei = _make_simple_undirected(g.edge_index.to('cpu'), num_nodes=N)
+    ei = _edge_index_to_half_undirected(g.edge_index.to('cpu'))
+
 
     # partizione per suffisso (se attiva)
     if stratify_by_suffix and hasattr(g, "string_id"):
@@ -181,12 +205,20 @@ def rewire_degree_preserving_complete(
     G_new.add_edges_from(cross_edges)
 
     # back to edge_index
-    ei_new = _edge_index_from_nx(G_new, num_nodes=N, device=device)
+    import numpy as np
+    edges_list = []
+    for u, v in G_new.edges():
+        edges_list.append((min(u, v), max(u, v)))
+
+    if len(edges_list) == 0:
+        ei_new = torch.empty((2, 0), dtype=torch.long, device=device)
+    else:
+        ei_new = torch.as_tensor(np.array(edges_list).T, dtype=torch.long, device=device)
+
     g.edge_index = ei_new
 
     # edge_attr neutro = 1 (shape [E,1])
-    E_new = g.edge_index.size(1) // 2  # metà superiore *2 per simmetrizzazione
-    g.edge_attr = torch.ones((2 * E_new, 1), dtype=torch.float32, device=device)
+    g.edge_attr = torch.ones((g.edge_index.size(1), 1), dtype=torch.float32, device=device)
 
     return g
 
@@ -212,23 +244,7 @@ from torch_geometric.utils import remove_self_loops
 import networkx as nx
 
 
-def _edge_index_to_half_undirected(edge_index: Tensor) -> Tensor:
-    """
-    Porta edge_index a rappresentazione non orientata "half":
-    - rimuove self-loop
-    - normalizza ogni arco come (min(u,v), max(u,v))
-    - rimuove duplicati
-    Restituisce edge_index [2, E_half] con u<v per ogni colonna.
-    """
-    ei, _ = remove_self_loops(edge_index)
-    i, j = ei
-    u = torch.minimum(i, j)
-    v = torch.maximum(i, j)
-    ei_half = torch.stack([u, v], dim=0)
-    ei_half = torch.unique(ei_half, dim=1)
-    return ei_half
-
-
+# Nuovo
 def rewire_degree_preserving_stratified(
     data: Data,
     *,
@@ -588,7 +604,7 @@ def _sample_simple_undirected_edges_on_nodes(
     sampled = [possible_edges[k] for k in idx]
     return sampled
 
-
+# Nuovo
 def rewire_non_degree_preserving_stratified(
     data: Data,
     *,
