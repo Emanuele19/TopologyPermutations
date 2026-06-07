@@ -76,7 +76,7 @@ class DuplicateCommonNodesAndRelabel(BaseTransform):
         self.drop_original_common = drop_original_common
         self.detect_common_from_label2 = detect_common_from_label2
 
-    def __call__(self, data: HeteroData) -> HeteroData:
+    def forward(self, data: HeteroData) -> HeteroData:
         store = data[self.node_type]
         num_nodes: int = store.num_nodes
 

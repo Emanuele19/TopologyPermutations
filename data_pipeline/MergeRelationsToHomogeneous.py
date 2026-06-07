@@ -64,7 +64,7 @@ class MergeRelationsToHomogeneous(BaseTransform):
         self.edge_attr_reduce = edge_attr_reduce
         self.add_edge_type = add_edge_type
 
-    def __call__(self, data: HeteroData) -> Data:
+    def forward(self, data: HeteroData) -> Data:
         node_store = data[self.node_type]
         x = node_store.x
         y = getattr(node_store, self.label_attr) if hasattr(node_store, self.label_attr) else None

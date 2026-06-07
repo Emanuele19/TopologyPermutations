@@ -42,7 +42,7 @@ class ReindexConsecutive(BaseTransform):
         self.node_type = node_type
         self.remove_with_drop_mask = remove_with_drop_mask
 
-    def __call__(self, data: HeteroData) -> HeteroData:
+    def forward(self, data: HeteroData) -> HeteroData:
         store = data[self.node_type]
         num_nodes = store.num_nodes
 

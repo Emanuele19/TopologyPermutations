@@ -63,7 +63,7 @@ class FilterSmallConnectedComponents(BaseTransform):
         self.min_size = min_size
         self.undirected = undirected
 
-    def __call__(self, data: Data) -> Data:
+    def forward(self, data: Data) -> Data:
         assert isinstance(data, Data), "FilterSmallConnectedComponents atteso su Data omogeneo."
         N = data.num_nodes
         if N == 0 or data.edge_index.numel() == 0:

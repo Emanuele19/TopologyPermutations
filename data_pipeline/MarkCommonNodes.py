@@ -47,7 +47,7 @@ class MarkCommonNodes(BaseTransform):
         self.edge_types = tuple(edge_types)
         self.node_type = node_type
 
-    def __call__(self, data: HeteroData) -> HeteroData:
+    def forward(self, data: HeteroData) -> HeteroData:
         num_nodes = data[self.node_type].num_nodes
         # Insiemi di nodi toccati per ogni relazione
         touched_sets: List[Tensor] = []
