@@ -2,6 +2,11 @@
 # - rewire_degree_preserving_complete
 # - rewire_degree_preserving_stratified
 # - rewire_non_degree_preserving_stratified
+# Per esperimenti paper (senza dividere i grafi):
+# "R1": rewire_degree_preserving_complete,
+# "R2": rewire_degree_preserving_stratified_connected,
+# "R3": rewire_non_degree_preserving_stratified_complete
+
 
 from __future__ import annotations
 import re
@@ -108,7 +113,7 @@ def rewire_degree_preserving_complete(
     suffix_regex: str = r"_(AD|PD)$",
 ) -> Data:
     """
-    Rewiring degree-preserving su tutto il grafo (non stratificato per label).
+    Rewiring degree-preserving su tutto il grafo, con opzionale stratificazione per suffisso.
 
     Parametri
     ---------
