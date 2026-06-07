@@ -94,8 +94,8 @@ class Evaluator:
 
         # Costruisce un "parts" minimale con la sola mask richiesta.
         parts = {
-            "supervised_mask": torch.as_tensor(mask, dtype=torch.bool, device=data.y.device),
-            "test_mask": torch.as_tensor(mask, dtype=torch.bool, device=data.y.device),
+            "supervised_mask":  torch.as_tensor(mask, dtype=torch.bool, device=data.y.device),
+            "test_mask":        torch.as_tensor(mask, dtype=torch.bool, device=data.y.device),
         }
         y_true, y_pred = task.predict(model, data, parts, phase="test", fold_k=None, mode=self.mode)
         yt = y_true.view(-1).cpu().numpy()
