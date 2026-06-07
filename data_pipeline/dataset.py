@@ -45,20 +45,23 @@ class NeuroDegAnc2VecDataset(InMemoryDataset):
     """
     def __init__(self,
                  root: str,
-                 ad_nodes_csv: str = "networks/AD_nodes.csv",
-                 pd_nodes_csv: str = "networks/PD_nodes.csv",
-                 ad_edges_csv: str = "networks/AD_edges.csv",
-                 pd_edges_csv: str = "networks/PD_edges.csv",
+                 c0_nodes_csv: str = "networks/AD_nodes.csv",
+                 c1_nodes_csv: str = "networks/PD_nodes.csv",
+                 c0_edges_csv: str = "networks/AD_edges.csv",
+                 c1_edges_csv: str = "networks/PD_edges.csv",
                  anc2vec_npz_path: str = "data_pipeline/anc2vec_go_embeddings_v1.npz",
+                 class_labels: list[str] = ['AD','PD'],
                  transform=None, pre_transform=None,
                  force_reload=False):
         self._cfg = {
-            "ad_nodes_csv": ad_nodes_csv,
-            "pd_nodes_csv": pd_nodes_csv,
-            "ad_edges_csv": ad_edges_csv,
-            "pd_edges_csv": pd_edges_csv,
+            "c0_nodes_csv": c0_nodes_csv,
+            "c1_nodes_csv": c1_nodes_csv,
+            "c0_edges_csv": c0_edges_csv,
+            "c1_edges_csv": c1_edges_csv,
             "anc2vec_npz_path": anc2vec_npz_path
         }
+
+        self._class_labels = class_labels
         super().__init__(root, transform, pre_transform, force_reload=force_reload)
         # --- LOAD con allowlist + weights_only=False ---
         processed_path = self.processed_paths[0]
@@ -74,12 +77,11 @@ class NeuroDegAnc2VecDataset(InMemoryDataset):
     @property
     def raw_file_names(self):
         # Le path sono relative a root/data/raw/
-        return [
-            "networks/AD_nodes.csv",
-            "networks/PD_nodes.csv",
-            "networks/AD_edges.csv",
-            "networks/PD_edges.csv",
-        ]
+        return list(self._cfg.values())
+    
+    @property
+    def labels(self):
+        return self._class_labels
 
     @property
     def processed_file_names(self):
@@ -119,10 +121,10 @@ class NeuroDegAnc2VecDataset(InMemoryDataset):
         from data_pipeline.anc2vec_utils import load_anc2vec_npz, merge_embeddings
 
         # ----- 0) config e input files
-        ad_nodes_csv = self._cfg["ad_nodes_csv"]
-        pd_nodes_csv = self._cfg["pd_nodes_csv"]
-        ad_edges_csv = self._cfg["ad_edges_csv"]
-        pd_edges_csv = self._cfg["pd_edges_csv"]
+        c0_nodes_csv = self._cfg["c0_nodes_csv"]
+        c1_nodes_csv = self._cfg["c1_nodes_csv"]
+        c0_edges_csv = self._cfg["c0_edges_csv"]
+        c1_edges_csv = self._cfg["c1_edges_csv"]
         anc2vec_npz_path = Path(self._cfg['anc2vec_npz_path'])
         if not anc2vec_npz_path.exists():
             raise FileNotFoundError(
@@ -131,25 +133,25 @@ class NeuroDegAnc2VecDataset(InMemoryDataset):
             )
 
         # ----- 1) carica nodi
-        ad_nodes = pd.read_csv(ad_nodes_csv).rename(columns={"name": "STRING_id"})
-        pd_nodes = pd.read_csv(pd_nodes_csv).rename(columns={"name": "STRING_id"})
+        c0_nodes = pd.read_csv(c0_nodes_csv).rename(columns={"name": "STRING_id"})
+        c1_nodes = pd.read_csv(c1_nodes_csv).rename(columns={"name": "STRING_id"})
 
         # ----- 2) carica e parsa archi
-        ad_edges_raw = pd.read_csv(ad_edges_csv, usecols=["name", "experimentally_determined_interaction"])
-        pd_edges_raw = pd.read_csv(pd_edges_csv, usecols=["name", "experimentally_determined_interaction"])
-        ad_edges = self._extract_edges(ad_edges_raw)  # -> columns: node1,node2,experimentally_determined_interaction
-        pd_edges = self._extract_edges(pd_edges_raw)
+        c0_edges_raw = pd.read_csv(c0_edges_csv, usecols=["name", "experimentally_determined_interaction"])
+        c1_edges_raw = pd.read_csv(c1_edges_csv, usecols=["name", "experimentally_determined_interaction"])
+        c0_edges = self._extract_edges(c0_edges_raw)  # -> columns: node1,node2,experimentally_determined_interaction
+        c1_edges = self._extract_edges(c1_edges_raw)
 
         # ----- 3) GO list per nodo
-        ad_nodes["GO_list"] = self._split_go_ids(ad_nodes["Gene Ontology IDs"])
-        pd_nodes["GO_list"] = self._split_go_ids(pd_nodes["Gene Ontology IDs"])
+        c0_nodes["GO_list"] = self._split_go_ids(c0_nodes["Gene Ontology IDs"])
+        c1_nodes["GO_list"] = self._split_go_ids(c1_nodes["Gene Ontology IDs"])
 
         # ----- 4) etichette 0/1 e merge; overlap -> 2
-        ad_nodes["label"] = 0
-        pd_nodes["label"] = 1
+        c0_nodes["label"] = 0
+        c1_nodes["label"] = 1
         combined = pd.concat(
-            [ad_nodes[["STRING_id", "GO_list", "label"]],
-             pd_nodes[["STRING_id", "GO_list", "label"]]],
+            [c0_nodes[["STRING_id", "GO_list", "label"]],
+             c1_nodes[["STRING_id", "GO_list", "label"]]],
             ignore_index=True
         )
 
@@ -184,8 +186,8 @@ class NeuroDegAnc2VecDataset(InMemoryDataset):
             edge_index = np.stack([src, dst], axis=0)  # [2, E]
             return edge_index, w
 
-        ad_edge_index_np, ad_w = map_edges(ad_edges)
-        pd_edge_index_np, pd_w = map_edges(pd_edges)
+        c0_edge_index_np, c0_w = map_edges(c0_edges)
+        c1_edge_index_np, c1_w = map_edges(c1_edges)
 
         # ----- 7) costruisci HeteroData
         data = HeteroData()
@@ -193,11 +195,11 @@ class NeuroDegAnc2VecDataset(InMemoryDataset):
         data["protein"].y = y
         data["protein"].string_id = merged["STRING_id"].tolist()
 
-        data[("protein", "AD", "protein")].edge_index = torch.from_numpy(ad_edge_index_np).long()
-        data[("protein", "AD", "protein")].edge_attr  = torch.from_numpy(ad_w).reshape(-1, 1)
+        data[("protein", self._class_labels[0], "protein")].edge_index = torch.from_numpy(c0_edge_index_np).long()
+        data[("protein", self._class_labels[0], "protein")].edge_attr  = torch.from_numpy(c0_w).reshape(-1, 1)
 
-        data[("protein", "PD", "protein")].edge_index = torch.from_numpy(pd_edge_index_np).long()
-        data[("protein", "PD", "protein")].edge_attr  = torch.from_numpy(pd_w).reshape(-1, 1)
+        data[("protein", self._class_labels[1], "protein")].edge_index = torch.from_numpy(c1_edge_index_np).long()
+        data[("protein", self._class_labels[1], "protein")].edge_attr  = torch.from_numpy(c1_w).reshape(-1, 1)
 
         # ----- 8) pre_filter / pre_transform
         # Nota: su HeteroData, pre_filter se presente deve accettare/ritornare bool

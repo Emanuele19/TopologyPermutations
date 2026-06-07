@@ -4,10 +4,12 @@ from .DuplicateCommonNodesAndRelabel import DuplicateCommonNodesAndRelabel
 from .MarkCommonNodes import MarkCommonNodes
 from .MergeRelationsToHomogeneous import MergeRelationsToHomogeneous
 from .ReindexConsecutive import ReindexConsecutive
+from .FilterLargestComponentPerClass import FilterLargestComponentPerClass
 
 __all__ = ['NeuroDegAnc2VecDataset', 
            'FilterSmallConnectedComponents',
            'DuplicateCommonNodesAndRelabel',
            'MarkCommonNodes',
            'MergeRelationsToHomogeneous',
-           'ReindexConsecutive']
+           'ReindexConsecutive',
+           'FilterLargestComponentPerClass']
