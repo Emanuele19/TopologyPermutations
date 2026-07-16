@@ -30,10 +30,10 @@ def main():
     data_root.mkdir(parents=True, exist_ok=True)
 
     # Paths for the dataset configuration (raw input files)
-    c0_nodes_csv = project_root / "networks" / "MS_nodes.csv"
-    c1_nodes_csv = project_root / "networks" / "SLE_nodes.csv"
-    c0_edges_csv = project_root / "networks" / "MS_edges.csv"
-    c1_edges_csv = project_root / "networks" / "SLE_edges.csv"
+    c0_nodes_csv = project_root / "networks" / "HD_nodes.csv"
+    c1_nodes_csv = project_root / "networks" / "MSA_nodes.csv"
+    c0_edges_csv = project_root / "networks" / "HD_edges.csv"
+    c1_edges_csv = project_root / "networks" / "MSA_edges.csv"
     anc2vec_npz_path = project_root / "data_pipeline" / "anc2vec_go_embeddings_v1.npz"
 
     class_labels = (('T1', 'T2'))

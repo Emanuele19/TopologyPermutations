@@ -137,27 +137,18 @@ COMMON_NODES = {'P06702', 'Q13501', 'P10636', 'P49768', 'P48023',
  'P20700'}
 
 def main():
-    # Esempio di utilizzo:
     base_sources_path = Path("./sources/test_db")
     base_networks_path = Path("./networks")
 
-    d1_string_edge_input = base_sources_path / "STRING_MS.tsv"
-    d1_edges_output = base_networks_path / "MS_edges.csv"
+    d1_string_edge_input = base_sources_path / "STRING_FTD.tsv"
+    d1_edges_output = base_networks_path / "FTD_edges.csv"
 
-    d1_nodes_input = base_sources_path / "UniProtKB-MS.tsv"
-    d1_nodes_output = base_networks_path / "MS_nodes.csv"
-
-    d2_string_edge_input = base_sources_path / "STRING_SLE.tsv"
-    d2_edges_output = base_networks_path / "SLE_edges.csv"
-
-    d2_nodes_input = base_sources_path / "UniProtKB-SLE.tsv"
-    d2_nodes_output = base_networks_path / "SLE_nodes.csv"
+    d1_nodes_input = base_sources_path / "UniProtKB-FTD.tsv"
+    d1_nodes_output = base_networks_path / "FTD_nodes.csv"
 
 
     process_edge_file(d1_string_edge_input, d1_edges_output)
     process_node_file(d1_nodes_input, d1_nodes_output)
-    process_edge_file(d2_string_edge_input, d2_edges_output)
-    process_node_file(d2_nodes_input, d2_nodes_output)
 
     # --- Esecuzione Test ---
     # Decommenta la riga sotto per eseguire la verifica automatica
